@@ -101,8 +101,8 @@ add_subdirectory(examples)
 message(STATUS "[H-EQS] Injecting Scheduler Library...")
 
 # 1. Import Static Library
-add_library(heqs STATIC IMPORTED GLOBAL)
-set_target_properties(heqs PROPERTIES IMPORTED_LOCATION "/app/build/libheqs.a")
+add_library(heqs SHARED IMPORTED GLOBAL)
+set_target_properties(heqs PROPERTIES IMPORTED_LOCATION "/app/build/libheqs.so")
 
 # 2. Link against oqsprovider
 # Because we enabled CMP0079 at the top, this will now succeed!

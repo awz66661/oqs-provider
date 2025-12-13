@@ -150,19 +150,21 @@ static int oqs_qs_kem_encaps_keyslot(void *vpkemctx, unsigned char *out,
 
 
     ASYNC_JOB *job = ASYNC_get_current_job();
+    
     if (job != NULL) {
-        // 1. 初始化调度器 (如果还没初始化)
-        // 简单起见，利用 pthread_once 或者懒加载，这里假设 main 函数已经调了 init
-        // 或者在这里做一个简单的静态标志位判断
-        static int sched_started = 0;
-        if (!sched_started) { heqs_scheduler_init(); sched_started = 1; }
+        // [DEBUG] 懒加载初始化
+        static int sched_init_done = 0;
+        if (!sched_init_done) { heqs_scheduler_init(); sched_init_done = 1; }
 
-        // 2. 准备异步上下文
         int efd = eventfd(0, EFD_NONBLOCK);
-        ASYNC_WAIT_CTX *wait_ctx = ASYNC_get_wait_ctx(job);
-        ASYNC_WAIT_CTX_set_wait_fd(wait_ctx, &efd, efd, NULL, NULL);
+        if (efd < 0) return -1;
 
-        // 3. 提交任务
+        ASYNC_WAIT_CTX *wait_ctx = ASYNC_get_wait_ctx(job);
+        if (!ASYNC_WAIT_CTX_set_wait_fd(wait_ctx, &efd, efd, NULL, NULL)) {
+            close(efd);
+            return -1;
+        }
+
         heqs_task_t task;
         task.kem_ctx = kem_ctx;
         task.public_key = pkemctx->kem->comp_pubkey[keyslot];
@@ -170,17 +172,26 @@ static int oqs_qs_kem_encaps_keyslot(void *vpkemctx, unsigned char *out,
         task.shared_secret = secret;
         task.efd = efd;
 
-        heqs_submit_task(&task);
+        // [DEBUG] 检查 Provider 侧的大小
+        static int size_checked = 0;
+        if (!size_checked) {
+            fprintf(stderr, "[Provider] sizeof(heqs_task_t) = %zu\n", sizeof(heqs_task_t));
+            fprintf(stderr, "[Provider] Output Ptrs: CT=%p, SS=%p\n", out, secret);
+            size_checked = 1;
+        }
 
-        // 4. 挂起
+        if (heqs_submit_task(&task) != 0) {
+            OQS_KEM_PRINTF("OQS Error: Task queue full\n");
+            ASYNC_WAIT_CTX_clear_fd(wait_ctx, &efd);
+            close(efd);
+            return -1;
+        }
+
         ASYNC_pause_job();
 
-        // 5. 恢复与清理
         ASYNC_WAIT_CTX_clear_fd(wait_ctx, &efd);
         close(efd);
-        
-        // 假设 Poller 已经填好了 out 和 secret
-        return 1;
+        return 1; 
     }
 
 

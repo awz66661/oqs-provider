@@ -17,6 +17,11 @@
 #include <openssl/params.h>
 #include <string.h>
 
+#include "../../../src/include/heqs_api.h" // 指向你的头文件
+#include <sys/eventfd.h>
+#include <openssl/async.h>
+#include <unistd.h>
+
 #include "oqs_prov.h"
 
 #ifdef NDEBUG
@@ -142,6 +147,44 @@ static int oqs_qs_kem_encaps_keyslot(void *vpkemctx, unsigned char *out,
         OQS_KEM_PRINTF("OQS Warning: secret buffer too small\n");
         return -1;
     }
+
+
+    ASYNC_JOB *job = ASYNC_get_current_job();
+    if (job != NULL) {
+        // 1. 初始化调度器 (如果还没初始化)
+        // 简单起见，利用 pthread_once 或者懒加载，这里假设 main 函数已经调了 init
+        // 或者在这里做一个简单的静态标志位判断
+        static int sched_started = 0;
+        if (!sched_started) { heqs_scheduler_init(); sched_started = 1; }
+
+        // 2. 准备异步上下文
+        int efd = eventfd(0, EFD_NONBLOCK);
+        ASYNC_WAIT_CTX *wait_ctx = ASYNC_get_wait_ctx(job);
+        ASYNC_WAIT_CTX_set_wait_fd(wait_ctx, &efd, efd, NULL, NULL);
+
+        // 3. 提交任务
+        heqs_task_t task;
+        task.kem_ctx = kem_ctx;
+        task.public_key = pkemctx->kem->comp_pubkey[keyslot];
+        task.ciphertext = out;
+        task.shared_secret = secret;
+        task.efd = efd;
+
+        heqs_submit_task(&task);
+
+        // 4. 挂起
+        ASYNC_pause_job();
+
+        // 5. 恢复与清理
+        ASYNC_WAIT_CTX_clear_fd(wait_ctx, &efd);
+        close(efd);
+        
+        // 假设 Poller 已经填好了 out 和 secret
+        return 1;
+    }
+
+
+
     *outlen = kem_ctx->length_ciphertext;
     *secretlen = kem_ctx->length_shared_secret;
 

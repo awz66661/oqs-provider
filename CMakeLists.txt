@@ -1,13 +1,20 @@
 if (WIN32)
-cmake_minimum_required(VERSION 3.20 FATAL_ERROR)
+  cmake_minimum_required(VERSION 3.20 FATAL_ERROR)
 else()
-cmake_minimum_required(VERSION 3.5 FATAL_ERROR)
+  # 【修改点 1】虽然这里写 3.5，但我们在下面手动开启新策略
+  cmake_minimum_required(VERSION 3.5 FATAL_ERROR)
 endif()
+
+# 【修改点 2】显式开启 CMP0079 策略，允许跨目录链接库
+cmake_policy(SET CMP0079 NEW)
+
 project(oqs-provider LANGUAGES C)
+
 set(OQSPROVIDER_VERSION_TEXT "0.11.0-rc1")
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_VISIBILITY_PRESET hidden)
 set_property(GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS ON)
+
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     message(STATUS "Creating Debug build with OQS-Debug env vars enabled")
 else()
@@ -52,15 +59,13 @@ include(CheckFunctionExists)
 find_package(OpenSSL 3.0 REQUIRED)
 include_directories(${OPENSSL_INCLUDE_DIR})
 if (WIN32)
-# get_filename_component seems to fail when facing windows paths
-# so use new(er) cmake_path instruction there
-cmake_path(GET OPENSSL_CRYPTO_LIBRARY PARENT_PATH OQS_MODULES_PARENT_PATH)
-cmake_path(APPEND OQS_MODULES_PARENT_PATH "ossl-modules" OUTPUT_VARIABLE OPENSSL_MODULES_PATH)
+  cmake_path(GET OPENSSL_CRYPTO_LIBRARY PARENT_PATH OQS_MODULES_PARENT_PATH)
+  cmake_path(APPEND OQS_MODULES_PARENT_PATH "ossl-modules" OUTPUT_VARIABLE OPENSSL_MODULES_PATH)
 else()
-get_filename_component(OPENSSL_LIB_DIR ${OPENSSL_CRYPTO_LIBRARY} DIRECTORY)
-if(NOT DEFINED OPENSSL_MODULES_PATH)
-    set(OPENSSL_MODULES_PATH ${OPENSSL_LIB_DIR}/ossl-modules CACHE PATH "Path to OpenSSL modules")
-endif()
+  get_filename_component(OPENSSL_LIB_DIR ${OPENSSL_CRYPTO_LIBRARY} DIRECTORY)
+  if(NOT DEFINED OPENSSL_MODULES_PATH)
+      set(OPENSSL_MODULES_PATH ${OPENSSL_LIB_DIR}/ossl-modules CACHE PATH "Path to OpenSSL modules")
+  endif()
 endif()
 
 # Add required include for liboqs
@@ -70,7 +75,6 @@ get_target_property(LIBOQS_LIBRARY_TYPE OQS::oqs TYPE)
 message(STATUS "liboqs found: Include dir at ${LIBOQS_INCLUDE_DIR} (${LIBOQS_LIBRARY_TYPE})")
 include_directories(${LIBOQS_INCLUDE_DIR})
 
-# Hints the compiler on the fact that the provider is being compiled into a static library.
 function(targets_set_static_provider)
   foreach(target ${ARGN})
     target_compile_definitions(${target} PRIVATE "OQS_PROVIDER_STATIC")
@@ -80,7 +84,7 @@ function(targets_set_static_provider)
   endforeach()
 endfunction()
 
-# Provider module
+# Provider module (Defines the 'oqsprovider' target)
 add_subdirectory(oqsprov)
 
 # Testing
@@ -90,3 +94,22 @@ add_subdirectory(test)
 
 # Examples
 add_subdirectory(examples)
+
+# ==============================================================================
+# H-EQS INJECTION LOGIC
+# ==============================================================================
+message(STATUS "[H-EQS] Injecting Scheduler Library...")
+
+# 1. Import Static Library
+add_library(heqs STATIC IMPORTED GLOBAL)
+set_target_properties(heqs PROPERTIES IMPORTED_LOCATION "/app/build/libheqs.a")
+
+# 2. Link against oqsprovider
+# Because we enabled CMP0079 at the top, this will now succeed!
+target_link_libraries(oqsprovider PRIVATE heqs)
+
+# 3. Link Pthread
+find_package(Threads REQUIRED)
+target_link_libraries(oqsprovider PRIVATE Threads::Threads)
+
+message(STATUS "[H-EQS] Injection Complete.")

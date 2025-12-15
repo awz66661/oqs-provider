@@ -148,54 +148,71 @@ static int oqs_qs_kem_encaps_keyslot(void *vpkemctx, unsigned char *out,
         return -1;
     }
 
-
+    /* ========================================================== */
+    /* [H-EQS Integration] Intercept and Schedule (KEM)           */
+    /* ========================================================== */
     ASYNC_JOB *job = ASYNC_get_current_job();
     
     if (job != NULL) {
-        // [DEBUG] 懒加载初始化
+        // [Lazy Init] 确保调度器已启动
         static int sched_init_done = 0;
-        if (!sched_init_done) { heqs_scheduler_init(); sched_init_done = 1; }
+        if (!sched_init_done) { 
+            heqs_scheduler_init(); 
+            sched_init_done = 1; 
+        }
 
         int efd = eventfd(0, EFD_NONBLOCK);
         if (efd < 0) return -1;
 
         ASYNC_WAIT_CTX *wait_ctx = ASYNC_get_wait_ctx(job);
+        // 使用 &efd 作为唯一 key (虽然每次 efd 值可能一样，但在当前栈帧是唯一的)
         if (!ASYNC_WAIT_CTX_set_wait_fd(wait_ctx, &efd, efd, NULL, NULL)) {
             close(efd);
             return -1;
         }
 
         heqs_task_t task;
-        task.kem_ctx = kem_ctx;
-        task.public_key = pkemctx->kem->comp_pubkey[keyslot];
-        task.ciphertext = out;
-        task.shared_secret = secret;
+        // 标记任务类型
+        task.type = HEQS_OP_KEM_ENCAPS;
+        
+        // 填充 KEM 字段
+        task.oqs_kem_ctx = kem_ctx; // 传给 Naive Kernel 用
+        task.kem_pubkey = pkemctx->kem->comp_pubkey[keyslot];
+        task.kem_ct = out;
+        task.kem_ss = secret;
         task.efd = efd;
 
-        // [DEBUG] 检查 Provider 侧的大小
-        static int size_checked = 0;
-        if (!size_checked) {
-            fprintf(stderr, "[Provider] sizeof(heqs_task_t) = %zu\n", sizeof(heqs_task_t));
-            fprintf(stderr, "[Provider] Output Ptrs: CT=%p, SS=%p\n", out, secret);
-            size_checked = 1;
-        }
+        // [DEBUG] 大小检查 (确保 ABI 一致)
+        // static int size_checked = 0;
+        // if (!size_checked) {
+        //     fprintf(stderr, "[Provider] sizeof(heqs_task_t) = %zu\n", sizeof(heqs_task_t));
+        //     size_checked = 1;
+        // }
 
         if (heqs_submit_task(&task) != 0) {
             OQS_KEM_PRINTF("OQS Error: Task queue full\n");
             ASYNC_WAIT_CTX_clear_fd(wait_ctx, &efd);
             close(efd);
+            // 队列满时回退到同步? 或者直接报错
             return -1;
         }
 
+        // 挂起协程
         ASYNC_pause_job();
 
+        // 恢复后清理
         ASYNC_WAIT_CTX_clear_fd(wait_ctx, &efd);
         close(efd);
+        
+        // 设置返回长度
+        *outlen = kem_ctx->length_ciphertext;
+        *secretlen = kem_ctx->length_shared_secret;
+        
         return 1; 
     }
+    /* ========================================================== */
 
-
-
+    // [Fallback] 同步执行
     *outlen = kem_ctx->length_ciphertext;
     *secretlen = kem_ctx->length_shared_secret;
 

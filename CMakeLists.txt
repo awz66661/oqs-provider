@@ -96,20 +96,27 @@ add_subdirectory(test)
 add_subdirectory(examples)
 
 # ==============================================================================
-# H-EQS INJECTION LOGIC
+# H-EQS INJECTION LOGIC (DYNAMIC PATH VERSION)
 # ==============================================================================
-message(STATUS "[H-EQS] Injecting Scheduler Library...")
+message(STATUS "[H-EQS] Configuring Scheduler Linkage...")
 
-# 1. Import Static Library
+# 1. 允许从环境变量读取路径，如果没有则使用默认值
+set(HEQS_PATH $ENV{HEQS_LIB_PATH})
+
+if(NOT HEQS_PATH)
+    # 默认保底路径（可以设为 NAIVE 分支）
+    set(HEQS_PATH "/app/build/NAIVE/libheqs.so")
+endif()
+
+message(STATUS "[H-EQS] Target Library Path: ${HEQS_PATH}")
+
+# 2. 定义动态库
 add_library(heqs SHARED IMPORTED GLOBAL)
-set_target_properties(heqs PROPERTIES IMPORTED_LOCATION "/app/build/libheqs.so")
+set_target_properties(heqs PROPERTIES IMPORTED_LOCATION "${HEQS_PATH}")
 
-# 2. Link against oqsprovider
-# Because we enabled CMP0079 at the top, this will now succeed!
+# 3. 链接
 target_link_libraries(oqsprovider PRIVATE heqs)
-
-# 3. Link Pthread
 find_package(Threads REQUIRED)
 target_link_libraries(oqsprovider PRIVATE Threads::Threads)
 
-message(STATUS "[H-EQS] Injection Complete.")
+message(STATUS "[H-EQS] Injection Configuration Complete.")
